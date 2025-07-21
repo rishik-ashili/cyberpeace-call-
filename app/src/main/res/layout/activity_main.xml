@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switch_enable_service"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Enable Scam Call Screening"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="32dp" />
+
+    <TextView
+        android:id="@+id/text_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Status: Disabled"
+        android:textSize="16sp"
+        app:layout_constraintTop_toBottomOf="@id/switch_enable_service"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="16dp" />
+
+    <ScrollView
+        android:id="@+id/scroll_transcription"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toBottomOf="@id/text_status"
+        app:layout_constraintBottom_toTopOf="@id/debug_log"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="8dp"
+        android:fillViewport="true">
+
+        <TextView
+            android:id="@+id/text_transcription"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Transcription will appear here."
+            android:textSize="15sp"
+            android:padding="16dp" />
+    </ScrollView>
+
+    <TextView
+        android:id="@+id/debug_log"
+        android:layout_width="0dp"
+        android:layout_height="100dp"
+        android:background="#222222"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:padding="8dp"
+        android:scrollbars="vertical"
+        app:layout_constraintTop_toBottomOf="@id/scroll_transcription"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:text="Debug log:\n" />
+
+</androidx.constraintlayout.widget.ConstraintLayout> 
