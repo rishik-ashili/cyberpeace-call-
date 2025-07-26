@@ -24,9 +24,12 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.app.Activity
 import androidx.activity.result.ActivityResultLauncher
+import android.telecom.TelecomManager
+import android.net.Uri
 
 class MainActivity : AppCompatActivity() {
     private lateinit var switchEnableService: SwitchMaterial
+    private lateinit var switchSpeakerphone: SwitchMaterial
     private lateinit var textStatus: TextView
     private lateinit var textTranscription: TextView
     private lateinit var debugLog: TextView
@@ -41,21 +44,34 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var requestManageOwnCallsLauncher: ActivityResultLauncher<String>
     private lateinit var requestRoleDialerLauncher: ActivityResultLauncher<Intent>
+    private lateinit var requestRolePhoneLauncher: ActivityResultLauncher<Intent>
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.INTERNET,
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.RECORD_AUDIO,
         Manifest.permission.ANSWER_PHONE_CALLS,
-        Manifest.permission.READ_CONTACTS
+        Manifest.permission.READ_CONTACTS,
+        Manifest.permission.MODIFY_AUDIO_SETTINGS,
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.WRITE_CALL_LOG,
+        Manifest.permission.READ_PHONE_NUMBERS
     )
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             val allGranted = permissions.all { it.value }
             if (!allGranted) {
-                Toast.makeText(this, "All permissions are required for the app to function.", Toast.LENGTH_LONG).show()
+                val deniedPermissions = permissions.filter { !it.value }.keys.joinToString(", ")
+                Toast.makeText(this, "Permissions denied: $deniedPermissions. All permissions are required for the app to function.", Toast.LENGTH_LONG).show()
                 switchEnableService.isChecked = false
+                Log.e("MainActivity", "Permissions denied: $deniedPermissions")
+            } else {
+                Log.i("MainActivity", "All permissions granted successfully")
+                // Check if we can start the service now
+                if (switchEnableService.isChecked) {
+                    checkSpecialPermissions()
+                }
             }
         }
 
@@ -64,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         switchEnableService = findViewById(R.id.switch_enable_service)
+        switchSpeakerphone = findViewById(R.id.switch_speakerphone)
         textStatus = findViewById(R.id.text_status)
         textTranscription = findViewById(R.id.text_transcription)
         debugLog = findViewById(R.id.debug_log)
@@ -87,14 +104,30 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Dialer role not granted", Toast.LENGTH_SHORT).show()
             }
         }
+        
+        // Register role launcher for phone app
+        requestRolePhoneLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                Toast.makeText(this, "Phone app role granted", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Phone app role not granted", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         // Check if app is default call screening app
         checkDefaultCallScreeningApp()
+        
+        // Check if app is default phone app
+        checkDefaultPhoneApp()
 
         switchEnableService.setOnCheckedChangeListener { _, isChecked ->
             val prefs = getSharedPreferences("prefs", Context.MODE_PRIVATE)
             prefs.edit().putBoolean("auto_answer_enabled", isChecked).apply()
+            
             if (isChecked) {
+                Log.i("MainActivity", "User enabled service, checking requirements...")
+                
+                // Check internet first
                 if (!isInternetAvailable()) {
                     AlertDialog.Builder(this)
                         .setTitle("No Internet Connection")
@@ -104,15 +137,34 @@ class MainActivity : AppCompatActivity() {
                     switchEnableService.isChecked = false
                     return@setOnCheckedChangeListener
                 }
+                
+                // Check permissions
                 if (hasAllPermissions()) {
-                    checkAndRequestCallPermissions()
+                    Log.i("MainActivity", "All permissions granted, checking special permissions...")
+                    checkSpecialPermissions()
                 } else {
+                    Log.w("MainActivity", "Missing permissions, requesting...")
                     requestPermissions()
-                    switchEnableService.isChecked = false
+                    // Don't uncheck here, let the permission launcher handle it
                 }
             } else {
+                Log.i("MainActivity", "User disabled service")
                 textStatus.text = "Status: Disabled"
                 CallScreeningForegroundService.stop(this)
+            }
+        }
+
+        // Load speakerphone preference
+        val prefs = getSharedPreferences("prefs", Context.MODE_PRIVATE)
+        switchSpeakerphone.isChecked = prefs.getBoolean("speakerphone_enabled", true) // Default to true
+
+        switchSpeakerphone.setOnCheckedChangeListener { _, isChecked ->
+            val prefs = getSharedPreferences("prefs", Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("speakerphone_enabled", isChecked).apply()
+            if (isChecked) {
+                Toast.makeText(this, "Speakerphone will be enabled on auto-answered calls", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Speakerphone will be disabled on auto-answered calls", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -128,27 +180,90 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkSpecialPermissions() {
+        // Check SYSTEM_ALERT_WINDOW permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Log.w("MainActivity", "SYSTEM_ALERT_WINDOW permission not granted")
+                if (!isFinishing && !isDestroyed) {
+                    try {
+                        AlertDialog.Builder(this)
+                            .setTitle("Additional Permission Required")
+                            .setMessage("This app needs 'Display over other apps' permission for auto-answer functionality. Please grant it in the next screen.")
+                            .setPositiveButton("Grant Permission") { _, _ ->
+                                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                                startActivity(intent)
+                                checkAndRequestCallPermissions()
+                            }
+                            .setNegativeButton("Skip") { _, _ ->
+                                checkAndRequestCallPermissions()
+                            }
+                            .show()
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Failed to show overlay permission dialog: ${e.message}")
+                        checkAndRequestCallPermissions()
+                    }
+                } else {
+                    checkAndRequestCallPermissions()
+                }
+            } else {
+                Log.i("MainActivity", "SYSTEM_ALERT_WINDOW permission already granted")
+                checkAndRequestCallPermissions()
+            }
+        } else {
+            checkAndRequestCallPermissions()
+        }
+    }
+
     private fun requestPermissions() {
         permissionLauncher.launch(requiredPermissions)
     }
 
     private fun checkDefaultCallScreeningApp() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !isFinishing && !isDestroyed) {
             val roleManager = getSystemService(Context.ROLE_SERVICE) as RoleManager
             val isDefault = roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)
             if (!isDefault) {
-                AlertDialog.Builder(this)
-                    .setTitle("Set as Default Call Screening App")
-                    .setMessage("To detect and screen calls, please set this app as your default call screening app in system settings.")
-                    .setPositiveButton("Open Settings") { _, _ ->
-                        val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
-                        startActivity(intent)
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
+                try {
+                    AlertDialog.Builder(this)
+                        .setTitle("Set as Default Call Screening App")
+                        .setMessage("To detect and screen calls, please set this app as your default call screening app in system settings.")
+                        .setPositiveButton("Open Settings") { _, _ ->
+                            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
+                            startActivity(intent)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to show call screening dialog: ${e.message}")
+                }
             }
-        } else {
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             Toast.makeText(this, "Call screening requires Android 10+.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun checkDefaultPhoneApp() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !isFinishing && !isDestroyed) {
+            val roleManager = getSystemService(Context.ROLE_SERVICE) as RoleManager
+            val isDefaultPhone = roleManager.isRoleHeld(RoleManager.ROLE_DIALER)
+            if (!isDefaultPhone) {
+                try {
+                    AlertDialog.Builder(this)
+                        .setTitle("Set as Default Phone App")
+                        .setMessage("To enable auto-answer and speakerphone features, please set this app as your default phone app in system settings.")
+                        .setPositiveButton("Open Settings") { _, _ ->
+                            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER)
+                            requestRolePhoneLauncher.launch(intent)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to show phone app dialog: ${e.message}")
+                }
+            }
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Toast.makeText(this, "Phone app role requires Android 10+.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -160,23 +275,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isDefaultDialer(): Boolean {
-        val defaultDialer = Settings.Secure.getString(contentResolver, "dialer_default_application")
-        val myPackage = packageName
-        return defaultDialer == myPackage
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            packageName == telecomManager.defaultDialerPackage
+        } else {
+            val defaultDialer = Settings.Secure.getString(contentResolver, "dialer_default_application")
+            defaultDialer == packageName
+        }
     }
 
     private fun checkAndRequestCallPermissions() {
-        // If MANAGE_OWN_CALLS is granted, start service
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.MANAGE_OWN_CALLS) == PackageManager.PERMISSION_GRANTED) {
+        Log.i("MainActivity", "Checking call permissions...")
+        
+        // Check if we have MANAGE_OWN_CALLS permission
+        val hasManageOwnCalls = ContextCompat.checkSelfPermission(this, Manifest.permission.MANAGE_OWN_CALLS) == PackageManager.PERMISSION_GRANTED
+        Log.i("MainActivity", "MANAGE_OWN_CALLS permission: $hasManageOwnCalls")
+        
+        // Check if we are the default dialer
+        val isDefault = isDefaultDialer()
+        Log.i("MainActivity", "Is default dialer: $isDefault")
+        
+        if (hasManageOwnCalls || isDefault) {
+            Log.i("MainActivity", "Call permissions satisfied, starting service...")
             startCallScreeningService()
             return
         }
-        // If dialer role is held, start service
-        if (isDefaultDialer()) {
-            startCallScreeningService()
-            return
-        }
-        // Otherwise, request MANAGE_OWN_CALLS first
+        
+        // If we don't have permissions, request them
+        Log.w("MainActivity", "Call permissions not satisfied, requesting...")
         if (shouldShowRequestPermissionRationale(Manifest.permission.MANAGE_OWN_CALLS)) {
             AlertDialog.Builder(this)
                 .setTitle("Permission Required")
@@ -200,11 +326,28 @@ class MainActivity : AppCompatActivity() {
                 val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER)
                 requestRoleDialerLauncher.launch(intent)
             }
+        } else {
+            // For older versions, use TelecomManager approach
+            requestDefaultDialerLegacy()
+        }
+    }
+    
+    private fun requestDefaultDialerLegacy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
+            intent.putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName)
+            requestRoleDialerLauncher.launch(intent)
         }
     }
 
     private fun startCallScreeningService() {
+        Log.i("MainActivity", "Starting CallScreeningForegroundService...")
         textStatus.text = "Status: Enabled"
         CallScreeningForegroundService.start(this)
+        
+        // Show guidance if not set as default phone app
+        if (!isDefaultDialer()) {
+            Toast.makeText(this, "For best results, set this app as your default phone app", Toast.LENGTH_LONG).show()
+        }
     }
 } 

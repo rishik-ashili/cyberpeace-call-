@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">nama shiva</string>
+    <string name="accessibility_service_description">Live call transcription accessibility service for scam call screening app. This service attempts to transcribe call audio for accessibility purposes.</string>
 </resources>

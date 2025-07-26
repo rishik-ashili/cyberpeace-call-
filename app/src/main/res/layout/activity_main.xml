@@ -16,13 +16,23 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="32dp" />
 
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switch_speakerphone"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Enable Speakerphone on Auto-Answer"
+        app:layout_constraintTop_toBottomOf="@id/switch_enable_service"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="16dp" />
+
     <TextView
         android:id="@+id/text_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Status: Disabled"
         android:textSize="16sp"
-        app:layout_constraintTop_toBottomOf="@id/switch_enable_service"
+        app:layout_constraintTop_toBottomOf="@id/switch_speakerphone"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="16dp" />
