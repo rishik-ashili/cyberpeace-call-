@@ -24,6 +24,9 @@ import android.util.Log
 import android.media.MediaRecorder
 import android.media.AudioManager
 import android.media.AudioDeviceInfo
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.app.Activity
 import java.io.File
 
 class CallScreeningForegroundService : Service() {
@@ -53,6 +56,9 @@ class CallScreeningForegroundService : Service() {
     private var isRecording = false
     private var audioManager: AudioManager? = null
     private var isSpeakerphoneEnabled = false
+    private var mediaProjection: MediaProjection? = null
+    private var voiceAnalysisManager: VoiceAnalysisManager? = null
+    private var speakerCaptureEnabled = false
 
     override fun onCreate() {
         super.onCreate()
@@ -71,6 +77,9 @@ class CallScreeningForegroundService : Service() {
         // Reset speakerphone flag
         isSpeakerphoneEnabled = false
 
+        // Initialize VoiceAnalysisManager for speaker capture
+        voiceAnalysisManager = VoiceAnalysisManager(this)
+
         // Register phone state receiver
         phoneStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -87,12 +96,19 @@ class CallScreeningForegroundService : Service() {
                         
                         startManufacturerCallRecording()
                         startTranscription()
+                        
+                        // Start microphone-based speech recognition for call transcription
+                        startSpeakerAudioCapture()
                     } else if (state == TelephonyManager.EXTRA_STATE_IDLE) {
                         // Call ended, stop transcription and recording
                         Log.i("CallScreeningService", "Call ended - stopping services and disabling speakerphone")
                         broadcastTranscription("📞 Call ended")
                         stopTranscription()
                         stopCallRecording()
+                        
+                        // Stop microphone-based speech recognition
+                        stopSpeakerAudioCapture()
+                        
                         // InCallService handles speakerphone disable
                         Log.i("CallScreeningService", "Call ended - speakerphone will be handled by InCallService")
                     } else if (state == TelephonyManager.EXTRA_STATE_RINGING) {
@@ -123,6 +139,38 @@ class CallScreeningForegroundService : Service() {
             }
         }
         registerReceiver(phoneStateReceiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED))
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        intent?.let { serviceIntent ->
+            // Check if MediaProjection data is provided for speaker audio capture
+            val resultCode = serviceIntent.getIntExtra("resultCode", -1)
+            val resultData = serviceIntent.getParcelableExtra<Intent>("resultData")
+            val enableSpeakerCapture = serviceIntent.getBooleanExtra("enable_speaker_capture", false)
+            
+            if (enableSpeakerCapture && resultCode == Activity.RESULT_OK && resultData != null) {
+                Log.d("CallScreeningService", "Initializing MediaProjection for speaker audio capture")
+                try {
+                    val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    mediaProjection = projectionManager.getMediaProjection(resultCode, resultData)
+                    
+                    if (mediaProjection != null) {
+                        voiceAnalysisManager?.initializeMediaProjection(mediaProjection!!)
+                        speakerCaptureEnabled = true
+                        Log.d("CallScreeningService", "Speaker audio capture enabled successfully")
+                        broadcastTranscription("🔊 Speaker audio capture enabled")
+                    } else {
+                        Log.e("CallScreeningService", "Failed to create MediaProjection")
+                        broadcastTranscription("❌ Failed to enable speaker audio capture")
+                    }
+                } catch (e: Exception) {
+                    Log.e("CallScreeningService", "Error setting up MediaProjection: ${e.message}")
+                    broadcastTranscription("❌ Error enabling speaker audio capture: ${e.message}")
+                }
+            }
+        }
+        
+        return super.onStartCommand(intent, flags, startId)
     }
 
     private fun startTranscription() {
@@ -324,6 +372,27 @@ class CallScreeningForegroundService : Service() {
         }
     }
 
+    private fun startSpeakerAudioCapture() {
+        try {
+            Log.d("CallScreeningService", "Starting microphone-based call transcription...")
+            voiceAnalysisManager?.startListening()
+            broadcastTranscription("🎤 Call transcription started (microphone mode)")
+        } catch (e: Exception) {
+            Log.e("CallScreeningService", "Error starting call transcription: ${e.message}")
+            broadcastTranscription("❌ Failed to start call transcription: ${e.message}")
+        }
+    }
+
+    private fun stopSpeakerAudioCapture() {
+        try {
+            Log.d("CallScreeningService", "Stopping call transcription...")
+            voiceAnalysisManager?.stopListening()
+            broadcastTranscription("🛑 Call transcription stopped")
+        } catch (e: Exception) {
+            Log.e("CallScreeningService", "Error stopping call transcription: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         if (phoneStateReceiver != null) {
@@ -331,6 +400,13 @@ class CallScreeningForegroundService : Service() {
         }
         stopTranscription()
         stopCallRecording()
+        
+        // Clean up speaker audio capture resources
+        if (speakerCaptureEnabled) {
+            stopSpeakerAudioCapture()
+        }
+        voiceAnalysisManager?.destroy()
+        mediaProjection?.stop()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

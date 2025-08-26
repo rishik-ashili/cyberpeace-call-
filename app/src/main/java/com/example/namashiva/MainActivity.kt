@@ -26,12 +26,14 @@ import android.app.Activity
 import androidx.activity.result.ActivityResultLauncher
 import android.telecom.TelecomManager
 import android.net.Uri
+import android.media.projection.MediaProjectionManager
 
 class MainActivity : AppCompatActivity() {
     private lateinit var switchEnableService: SwitchMaterial
     private lateinit var switchSpeakerphone: SwitchMaterial
     private lateinit var textStatus: TextView
     private lateinit var textTranscription: TextView
+    private lateinit var textSpeakerTranscription: TextView
     private lateinit var debugLog: TextView
     private val CALL_LOG_ACTION = "com.example.namashiva.CALL_LOG_ACTION"
     private val CALL_LOG_EXTRA = "call_log"
@@ -39,12 +41,22 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val log = intent?.getStringExtra(CALL_LOG_EXTRA) ?: return
             debugLog.append("$log\n")
+            
+            // Handle speaker transcription separately
+            if (log.contains("Speaker Transcription:")) {
+                val speakerText = log.replace("Speaker Transcription: Speaker: ", "")
+                    .replace("Speaker Transcription: ", "")
+                runOnUiThread {
+                    textSpeakerTranscription.append("$speakerText\n")
+                }
+            }
         }
     }
 
     private lateinit var requestManageOwnCallsLauncher: ActivityResultLauncher<String>
     private lateinit var requestRoleDialerLauncher: ActivityResultLauncher<Intent>
     private lateinit var requestRolePhoneLauncher: ActivityResultLauncher<Intent>
+    private lateinit var mediaProjectionLauncher: ActivityResultLauncher<Intent>
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.INTERNET,
@@ -56,6 +68,7 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.CALL_PHONE,
         Manifest.permission.WRITE_CALL_LOG,
         Manifest.permission.READ_PHONE_NUMBERS
+        // Note: CAPTURE_AUDIO_OUTPUT removed - will use MediaProjection instead
     )
 
     private val permissionLauncher =
@@ -83,6 +96,7 @@ class MainActivity : AppCompatActivity() {
         switchSpeakerphone = findViewById(R.id.switch_speakerphone)
         textStatus = findViewById(R.id.text_status)
         textTranscription = findViewById(R.id.text_transcription)
+        textSpeakerTranscription = findViewById(R.id.text_speaker_transcription)
         debugLog = findViewById(R.id.debug_log)
 
         // Register receiver for call logs
@@ -111,6 +125,35 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Phone app role granted", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Phone app role not granted", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // Register MediaProjection launcher for speaker audio capture
+        mediaProjectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                Log.d("MainActivity", "MediaProjection permission granted for speaker audio capture")
+                val serviceIntent = Intent(this, CallScreeningForegroundService::class.java).apply {
+                    putExtra("resultCode", result.resultCode)
+                    putExtra("resultData", result.data)
+                    putExtra("enable_speaker_capture", true)
+                }
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                    Log.d("MainActivity", "Service started with MediaProjection for speaker capture")
+                    Toast.makeText(this, "Speaker audio capture enabled!", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Error starting service with MediaProjection: ${e.message}")
+                    Toast.makeText(this, "Failed to enable speaker capture: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Log.e("MainActivity", "MediaProjection permission denied for speaker audio capture")
+                Toast.makeText(this, "Speaker audio capture permission denied", Toast.LENGTH_SHORT).show()
+                // Still start the service without speaker capture
+                startCallScreeningService()
             }
         }
 
@@ -343,11 +386,33 @@ class MainActivity : AppCompatActivity() {
     private fun startCallScreeningService() {
         Log.i("MainActivity", "Starting CallScreeningForegroundService...")
         textStatus.text = "Status: Enabled"
-        CallScreeningForegroundService.start(this)
+        
+        // Check if we should request MediaProjection for speaker audio capture
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Request MediaProjection permission for speaker audio capture
+            requestMediaProjectionPermission()
+        } else {
+            // For older Android versions, start without speaker capture
+            CallScreeningForegroundService.start(this)
+        }
         
         // Show guidance if not set as default phone app
         if (!isDefaultDialer()) {
             Toast.makeText(this, "For best results, set this app as your default phone app", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun requestMediaProjectionPermission() {
+        try {
+            Log.d("MainActivity", "Requesting MediaProjection permission for speaker audio capture")
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            val captureIntent = projectionManager.createScreenCaptureIntent()
+            mediaProjectionLauncher.launch(captureIntent)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error requesting MediaProjection: ${e.message}")
+            Toast.makeText(this, "Failed to request speaker capture permission", Toast.LENGTH_SHORT).show()
+            // Fallback to regular service without speaker capture
+            CallScreeningForegroundService.start(this)
         }
     }
 } 
